@@ -1,9 +1,12 @@
 import 'dotenv/config';
+import http from 'node:http';
+import dns from 'node:dns/promises';
 import mineflayer from 'mineflayer';
 import { pathfinder, Movements, goals } from 'mineflayer-pathfinder';
 
 const host = process.env.MC_HOST;
-const port = Number(process.env.MC_PORT || 25565);
+let port = Number(process.env.MC_PORT || 25565);
+let resolvedHost = host;
 const username = process.env.BOT_USERNAME || 'MindcraftBot';
 const auth = process.env.MC_AUTH || 'offline';
 
@@ -20,7 +23,27 @@ if (!['offline', 'microsoft'].includes(auth)) {
   process.exit(1);
 }
 
-const bot = mineflayer.createBot({ host, port, username, auth, hideErrors: false });
+// Render web services must listen on their assigned HTTP port.
+const server = http.createServer((_req, res) => {
+  res.writeHead(200, { 'content-type': 'text/plain' });
+  res.end('Mindcraft bot process running. Minecraft connection may still be offline.\\n');
+});
+server.listen(Number(process.env.PORT || 10000), '0.0.0.0');
+
+if (!process.env.MC_PORT) {
+  try {
+    const records = await dns.resolveSrv('_minecraft._tcp.' + host);
+    if (records.length) {
+      records.sort((a, b) => a.priority - b.priority);
+      resolvedHost = records[0].name.replace(/\\.$/, '');
+      port = records[0].port;
+      console.log('[DNS SRV]', resolvedHost + ':' + port);
+    }
+  } catch (error) {
+    console.warn('[DNS SRV] No Java SRV record found; trying port 25565:', error.code || error.message);
+  }
+}
+const bot = mineflayer.createBot({ host: resolvedHost, port, username, auth, hideErrors: false });
 bot.loadPlugin(pathfinder);
 
 let movements;
@@ -87,7 +110,7 @@ function selectGoal() {
 }
 
 bot.once('spawn', () => {
-  console.log('[Connected]', bot.username, 'at', host + ':' + port);
+  console.log('[Connected]', bot.username, 'at', resolvedHost + ':' + port);
   movements = new Movements(bot);
   movements.canDig = false;
   movements.allow1by1towers = false;
